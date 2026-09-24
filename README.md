@@ -155,8 +155,9 @@ panel, since llmtop cannot tell which program answers. They are measured
 over HTTP only, so it shows no process CPU, memory or GPU figures. Without
 `/slots`, its tok/s is the speed of the **last finished request**, taken from the
 two `/metrics` counters rather than as a rate over wall time (which would jump
-when a request ends and fall back to zero); it is held until the next request
-finishes, and the line says so.
+when a request ends and fall back to zero). It is shown as tok/s only while the
+server is busy; when it is idle the column shows a dimmed `0.0` and the figure moves to the
+line below (`last request … tok/s`), so an idle server does not look busy.
 
 ### Unified memory
 

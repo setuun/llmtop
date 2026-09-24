@@ -16,7 +16,8 @@ unit_glob_service = "llama-*.service"
 # process: one in a container, on another host, or an engine with its own binary
 # name. They get their own "Endpoints" panel. Measured over HTTP only (/v1/models,
 # /slots or else /metrics), so no process CPU, memory or GPU figures. Without /slots,
-# tok/s is the speed of the last finished request, not a live rate.
+# tok/s is the speed of the last finished request, shown while the server is
+# busy; when idle it shows 0.0 and the figure moves to the line below.
 urls = []   # e.g. ["http://127.0.0.1:8092"]
 
 [ollama]

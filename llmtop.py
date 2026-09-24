@@ -1006,12 +1006,21 @@ class Collector:
         if processing is not None:
             be.slots_busy = int(processing)
             be.busy = processing > 0
-        be.tps = self.finished.rate(f"tg:{base}", vals.get("tokens_predicted_total"),
-                                    vals.get("tokens_predicted_seconds_total"))
+        last = self.finished.rate(f"tg:{base}", vals.get("tokens_predicted_total"),
+                                  vals.get("tokens_predicted_seconds_total"))
         pp = self.finished.rate(f"pp:{base}", vals.get("prompt_tokens_total"),
                                 vals.get("prompt_seconds_total"))
-        if be.tps is not None:
-            be.extras.append("tok/s per finished request")
+        # The counters only move when a request ends, so there is no live rate. While the
+        # server is busy the last request's speed stands in for it; when it is idle the
+        # tok/s column says so (0.0, dimmed, graph at zero) and the figure moves to the extras,
+        # rather than looking like generation that is not happening.
+        if last is not None:
+            if be.busy:
+                be.tps = last
+                be.extras.append("tok/s of the last request")
+            else:
+                be.tps = 0.0  # idle: dimmed 0.0, graph at zero, row stays in place
+                be.extras.append(f"last request {last:.1f} tok/s")
         if pp is not None:
             be.extras.append(f"prompt {pp:.0f} tok/s")
 

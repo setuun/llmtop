@@ -941,11 +941,17 @@ class Collector:
                 self._llama_live(be, cfg.get("host") or "127.0.0.1", cfg["port"],
                                  bool(cfg.get("metrics")))
             backends.append(be)
+        return backends
 
-        # configured endpoints: servers found neither as a unit nor as a process
-        # (a container, another host, an engine with its own binary name)
-        seen = {be.port for be in backends if be.port}
-        for url in self.cfg["llama"].get("endpoints") or []:
+    # -- configured endpoints -----------------------------------------------
+
+    def collect_endpoints(self, llama: list[Backend]) -> list[Backend]:
+        """Servers named in [endpoints] urls: found neither as a unit nor as a
+        process (a container, another host, an engine with its own binary name)
+        but speaking llama.cpp's HTTP API."""
+        seen = {be.port for be in llama if be.port}
+        backends: list[Backend] = []
+        for url in self.cfg["endpoints"].get("urls") or []:
             be = self._llama_endpoint(str(url), seen)
             if be:
                 backends.append(be)
@@ -959,7 +965,7 @@ class Collector:
         if host in ("127.0.0.1", "localhost", "::1") and port in seen_ports:
             return None  # already shown as a unit or a process
         base = f"{parts.scheme or 'http'}://{host}:{port}"
-        be = Backend(kind="llama", name=f"{host}:{port}", detail="endpoint", port=port)
+        be = Backend(kind="endpoint", name=f"{host}:{port}", detail="http", port=port)
         models = http_json(f"{base}/v1/models")
         if not isinstance(models, dict):
             be.state = STOPPED
@@ -1615,8 +1621,9 @@ class Collector:
             snap.npu = f_npu.result()
             snap.system = f_sys.result()
         llama = self.collect_llama(o_pids | l_pids)
+        endpoints = self.collect_endpoints(llama)
         bench = self.collect_bench(o_pids | l_pids)
-        snap.backends = [*llama, ollama, lemon, *bench]
+        snap.backends = [*llama, *endpoints, ollama, lemon, *bench]
         attribute_gpu(snap)
         self.cpu.sweep()
         self.gputime.sweep()
@@ -1633,8 +1640,8 @@ DEFAULT_CFG: dict = {
     "llama": {
         "unit_glob_socket": "llama-*.socket",
         "unit_glob_service": "llama-*.service",
-        "endpoints": [],
     },
+    "endpoints": {"urls": []},
     "ollama": {
         "url": "http://127.0.0.1:11434",
         "model_dirs": [
@@ -1696,7 +1703,8 @@ def load_config(path: str | None) -> dict:
 STATE_STYLE = {RUNNING: "ok", SLEEPING: "idle", STOPPED: "warn", ABSENT: "dim"}
 STATE_WORD = {RUNNING: "running", SLEEPING: "asleep", STOPPED: "stopped",
               ABSENT: "absent"}
-KIND_TITLE = {"llama": "llama.cpp", "ollama": "Ollama", "lemonade": "Lemonade",
+KIND_TITLE = {"llama": "llama.cpp", "endpoint": "endpoints", "ollama": "Ollama",
+              "lemonade": "Lemonade",
               "bench": "benchmarks"}
 
 
@@ -1800,7 +1808,7 @@ class Layout:
 
 MEM_KIND = {"GPU": "GPU", "part GPU": "GPU", "RAM": "RAM", "RSS": "RSS"}
 LABEL_W = 5  # "CPU  "
-BOX_STYLE = {"system": "b_system", "llama": "b_llama",
+BOX_STYLE = {"system": "b_system", "llama": "b_llama", "endpoint": "b_endpoint",
              "ollama": "b_ollama", "lemonade": "b_lemonade", "bench": "b_bench"}
 
 
@@ -2200,7 +2208,8 @@ class Renderer:
         by_kind: dict[str, list[Backend]] = {}
         for be in snap.backends:
             by_kind.setdefault(be.kind, []).append(be)
-        kinds = [k for k in ("llama", "ollama", "lemonade", "bench") if by_kind.get(k)]
+        kinds = [k for k in ("llama", "endpoint", "ollama", "lemonade", "bench")
+                 if by_kind.get(k)]
 
         keys: list[Seg] = []
         if live:
@@ -2261,6 +2270,7 @@ PALETTE: dict[str, tuple[int, str | None, str]] = {
     # panel frames, one colour per panel like btop's boxes
     "b_system":   (65, "green", ""),
     "b_llama":    (137, "yellow", ""),
+    "b_endpoint": (73, "cyan", ""),
     "b_ollama":   (61, "blue", ""),
     "b_lemonade": (131, "red", ""),
     "b_bench":    (103, "blue", ""),

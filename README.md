@@ -118,7 +118,7 @@ the key bindings.
 |---|---|
 | llama.cpp: state, model, context | `systemctl show` on service and socket, start script |
 | llama.cpp: slots, tok/s | `GET /slots` on the internal port, delta of `n_decoded` |
-| llama.cpp-compatible endpoint (`[llama] endpoints`) | `GET /v1/models`; `/slots` if it has one, else `/metrics`: busy from `requests_processing`, tok/s from `tokens_predicted_total` ÷ `tokens_predicted_seconds_total` of finished requests |
+| Endpoints (`[endpoints] urls`) | `GET /v1/models`; `/slots` if it has one, else `/metrics`: busy from `requests_processing`, tok/s from `tokens_predicted_total` ÷ `tokens_predicted_seconds_total` of finished requests |
 | Ollama: model, memory, unload timer | `GET /api/ps` (`size_vram`, `context_length`, `expires_at`) |
 | Ollama: model ↔ runner process | manifests under `models/manifests`, blob digest of the model layer |
 | Lemonade: models, backends, idle time | `GET /api/v1/health`, `last_use` against `/proc/uptime` |
@@ -150,7 +150,8 @@ along live.
 
 A server that is neither a `llama-*` unit nor a `llama-server` process — one in a
 container, on another host, or an engine with its own binary name that speaks
-llama.cpp's HTTP API — can be listed under `[llama] endpoints`. It is measured
+llama.cpp's HTTP API — can be listed under `[endpoints] urls`. Such servers get their own **endpoints**
+panel, since llmtop cannot tell which program answers. They are measured
 over HTTP only, so it shows no process CPU, memory or GPU figures. Without
 `/slots`, its tok/s is the speed of the **last finished request**, taken from the
 two `/metrics` counters rather than as a rate over wall time (which would jump

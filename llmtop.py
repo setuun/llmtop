@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -527,6 +528,37 @@ class RateTracker:
         return delta / elapsed
 
 
+class FinishedRate:
+    """tokens/s of the requests that finished between two scrapes.
+
+    llama.cpp's /metrics (and servers that copy its names) write a token counter
+    and a seconds counter when a request ENDS, so a rate over wall time jumps and
+    falls back to zero. Dividing the two deltas instead gives what the server
+    itself reports per request. The last value is held until the next request
+    finishes; the first scrape starts from the lifetime average.
+    """
+
+    def __init__(self) -> None:
+        self._prev: dict[str, tuple[float, float]] = {}
+        self._last: dict[str, float] = {}
+
+    def rate(self, key: str, tokens: float | None, seconds: float | None) -> float | None:
+        if tokens is None or seconds is None:
+            return None
+        prev = self._prev.get(key)
+        self._prev[key] = (tokens, seconds)
+        if prev is None:
+            if tokens > 0 and seconds > 0:
+                self._last[key] = tokens / seconds
+        else:
+            d_tok, d_sec = tokens - prev[0], seconds - prev[1]
+            if d_tok < 0 or d_sec < 0:  # the server restarted
+                self._last.pop(key, None)
+            elif d_tok > 0 and d_sec > 0:
+                self._last[key] = d_tok / d_sec
+        return self._last.get(key)
+
+
 # --------------------------------------------------------------------------
 # reading llama-server command lines
 # --------------------------------------------------------------------------
@@ -765,6 +797,7 @@ class Collector:
         self.cpu = CpuTracker()
         self.gputime = GpuTimeTracker()
         self.rates = RateTracker()
+        self.finished = FinishedRate()
         self.guarded_ports: set[int] = set()
         self._npu_name: str | None = None
         self._npu_probed = False
@@ -908,7 +941,73 @@ class Collector:
                 self._llama_live(be, cfg.get("host") or "127.0.0.1", cfg["port"],
                                  bool(cfg.get("metrics")))
             backends.append(be)
+
+        # configured endpoints: servers found neither as a unit nor as a process
+        # (a container, another host, an engine with its own binary name)
+        seen = {be.port for be in backends if be.port}
+        for url in self.cfg["llama"].get("endpoints") or []:
+            be = self._llama_endpoint(str(url), seen)
+            if be:
+                backends.append(be)
         return backends
+
+    def _llama_endpoint(self, url: str, seen_ports: set[int]) -> Backend | None:
+        """A llama.cpp-compatible server named in the config, measured over HTTP only."""
+        parts = urllib.parse.urlsplit(url if "://" in url else f"http://{url}")
+        host = parts.hostname or "127.0.0.1"
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        if host in ("127.0.0.1", "localhost", "::1") and port in seen_ports:
+            return None  # already shown as a unit or a process
+        base = f"{parts.scheme or 'http'}://{host}:{port}"
+        be = Backend(kind="llama", name=f"{host}:{port}", detail="endpoint", port=port)
+        models = http_json(f"{base}/v1/models")
+        if not isinstance(models, dict):
+            be.state = STOPPED
+            be.extras.append("unreachable")
+            return be
+        be.state = RUNNING
+        data = models.get("data") or []
+        first = data[0] if data and isinstance(data[0], dict) else {}
+        be.model = model_label(None, first.get("id")) if first.get("id") else "-"
+        owner = first.get("owned_by")
+        if owner and owner != "llamacpp":
+            be.name = f"{owner}:{port}"
+        meta = first.get("meta") if isinstance(first.get("meta"), dict) else {}
+        be.ctx = meta.get("n_ctx") or first.get("max_model_len") or first.get("context_length")
+        slots = http_json(f"{base}/slots")
+        if isinstance(slots, list):
+            self._llama_live(be, host, port, True)
+        else:
+            self._metrics_live(be, base)
+        return be
+
+    def _metrics_live(self, be: Backend, base: str) -> None:
+        """Busy and speed from /metrics alone, for servers without /slots."""
+        text = http_text(f"{base}/metrics")
+        if not text:
+            be.extras.append("no /metrics")
+            return
+        vals: dict[str, float] = {}
+        for line in text.splitlines():
+            if not line.startswith("llamacpp:"):
+                continue
+            name, _, rest = line.partition(" ")
+            try:
+                vals[name[len("llamacpp:"):]] = float(rest.split()[0])
+            except (ValueError, IndexError):
+                pass
+        processing = vals.get("requests_processing")
+        if processing is not None:
+            be.slots_busy = int(processing)
+            be.busy = processing > 0
+        be.tps = self.finished.rate(f"tg:{base}", vals.get("tokens_predicted_total"),
+                                    vals.get("tokens_predicted_seconds_total"))
+        pp = self.finished.rate(f"pp:{base}", vals.get("prompt_tokens_total"),
+                                vals.get("prompt_seconds_total"))
+        if be.tps is not None:
+            be.extras.append("tok/s per finished request")
+        if pp is not None:
+            be.extras.append(f"prompt {pp:.0f} tok/s")
 
     def _llama_from_unit(self, service: str, user_scope: bool,
                          socket_unit: str | None, listen: str) -> Backend | None:
@@ -1534,6 +1633,7 @@ DEFAULT_CFG: dict = {
     "llama": {
         "unit_glob_socket": "llama-*.socket",
         "unit_glob_service": "llama-*.service",
+        "endpoints": [],
     },
     "ollama": {
         "url": "http://127.0.0.1:11434",

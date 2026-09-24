@@ -150,7 +150,7 @@ along live.
 
 A server that is neither a `llama-*` unit nor a `llama-server` process — one in a
 container, on another host, or an engine with its own binary name that speaks
-llama.cpp's HTTP API — can be listed under `[endpoints] urls`. Such servers get their own **endpoints**
+llama.cpp's HTTP API — can be listed under `[endpoints] urls`. Such servers get their own **Endpoints**
 panel, since llmtop cannot tell which program answers. They are measured
 over HTTP only, so it shows no process CPU, memory or GPU figures. Without
 `/slots`, its tok/s is the speed of the **last finished request**, taken from the

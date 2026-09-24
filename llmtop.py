@@ -1703,7 +1703,7 @@ def load_config(path: str | None) -> dict:
 STATE_STYLE = {RUNNING: "ok", SLEEPING: "idle", STOPPED: "warn", ABSENT: "dim"}
 STATE_WORD = {RUNNING: "running", SLEEPING: "asleep", STOPPED: "stopped",
               ABSENT: "absent"}
-KIND_TITLE = {"llama": "llama.cpp", "endpoint": "endpoints", "ollama": "Ollama",
+KIND_TITLE = {"llama": "llama.cpp", "endpoint": "Endpoints", "ollama": "Ollama",
               "lemonade": "Lemonade",
               "bench": "benchmarks"}
 

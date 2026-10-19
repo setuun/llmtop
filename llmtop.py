@@ -1180,6 +1180,47 @@ class Collector:
             out.append(be)
         return out
 
+    def collect_gpu_procs(self, known: set[int]) -> list[Backend]:
+        """Any other process holding a notable amount of GPU memory.
+
+        Speech servers, a PyTorch script, an engine in a container: none of them
+        speaks llama.cpp's API or has a known program name, and on unified memory
+        their GPU share is invisible in RSS. Shown with GPU memory, RAM, CPU and
+        GPU load; [gpu_processes] names gives them readable names by matching the
+        command line.
+        """
+        sect = self.cfg.get("gpu_processes", {})
+        min_bytes = int(sect.get("min_mib", 256)) << 20
+        if min_bytes <= 0:
+            return []
+        names = [(re.compile(str(n["match"])), str(n["name"]))
+                 for n in sect.get("names") or [] if n.get("match") and n.get("name")]
+        found: dict[int, tuple[ProcInfo, dict]] = {}
+        for proc in proc_all():
+            # A GPU process carries its runtime in RSS (tens of MiB at least), so the
+            # fdinfo walk can skip the many small processes.
+            if proc.pid in known or proc.pid == os.getpid() or proc.rss < (32 << 20):
+                continue
+            stats = drm_proc_stats(proc.pid)
+            if stats and stats["mem"] >= min_bytes:
+                found[proc.pid] = (proc, stats)
+        out = []
+        for pid, (proc, stats) in found.items():
+            if proc.ppid in found:
+                continue  # a forked worker shares its parent's DRM client
+            prog = os.path.basename(proc.argv[0]) if proc.argv else proc.comm
+            name = next((nm for rx, nm in names if rx.search(proc.cmdline)), prog)
+            be = Backend(kind="gpuproc", name=name, state=RUNNING, pid=pid,
+                         detail=prog if name != prog else "",
+                         model=" ".join(proc.argv[1:4]) or proc.comm,
+                         mem=proc.rss, mem_kind="RSS", since=self._proc_age(pid))
+            be.cpu = self.cpu.percent(pid, proc.cpu_ticks)
+            be.gpu_mem = stats["mem"]
+            be.gpu_util = self.gputime.percent(pid, stats["engine_ns"])
+            be.extras.append(f"RAM {human_bytes(proc.rss)}")
+            out.append(be)
+        return sorted(out, key=lambda b: -(b.gpu_mem or 0))
+
     def collect_ollama(self) -> tuple[Backend, set[int]]:
         host = self.cfg["ollama"]["url"].rstrip("/")
         be = Backend(kind="ollama", name="ollama")
@@ -1632,7 +1673,10 @@ class Collector:
         llama = self.collect_llama(o_pids | l_pids)
         endpoints = self.collect_endpoints(llama)
         bench = self.collect_bench(o_pids | l_pids)
-        snap.backends = [*llama, *endpoints, ollama, lemon, *bench]
+        known = o_pids | l_pids | {n.pid for be in (*llama, *endpoints, ollama, lemon, *bench)
+                                   for n in (be, *be.children) if n.pid}
+        gpuprocs = self.collect_gpu_procs(known)
+        snap.backends = [*llama, *endpoints, ollama, lemon, *bench, *gpuprocs]
         attribute_gpu(snap)
         self.cpu.sweep()
         self.gputime.sweep()
@@ -1663,6 +1707,7 @@ DEFAULT_CFG: dict = {
     "bench": {"programs": ["llama-bench", "llama-perplexity", "llama-batched-bench",
                            "llama-cli", "colibri", "xdna_energy_bench", "cpu_stream",
                            "gpu_bw", "gpu_import"]},
+    "gpu_processes": {"min_mib": 256, "names": []},
     "npu": {"xrt_smi": ["/opt/xilinx/xrt/bin/xrt-smi",
                         "/opt/xilinx/xrt/bin/unwrapped/xrt-smi"]},
 }
@@ -1714,7 +1759,7 @@ STATE_WORD = {RUNNING: "running", SLEEPING: "asleep", STOPPED: "stopped",
               ABSENT: "absent"}
 KIND_TITLE = {"llama": "llama.cpp", "endpoint": "Endpoints", "ollama": "Ollama",
               "lemonade": "Lemonade",
-              "bench": "benchmarks"}
+              "bench": "benchmarks", "gpuproc": "GPU processes"}
 
 
 ELLIPSIS = "…"
@@ -1818,7 +1863,8 @@ class Layout:
 MEM_KIND = {"GPU": "GPU", "part GPU": "GPU", "RAM": "RAM", "RSS": "RSS"}
 LABEL_W = 5  # "CPU  "
 BOX_STYLE = {"system": "b_system", "llama": "b_llama", "endpoint": "b_endpoint",
-             "ollama": "b_ollama", "lemonade": "b_lemonade", "bench": "b_bench"}
+             "ollama": "b_ollama", "lemonade": "b_lemonade", "bench": "b_bench",
+             "gpuproc": "b_gpuproc"}
 
 
 class Renderer:
@@ -2217,7 +2263,7 @@ class Renderer:
         by_kind: dict[str, list[Backend]] = {}
         for be in snap.backends:
             by_kind.setdefault(be.kind, []).append(be)
-        kinds = [k for k in ("llama", "endpoint", "ollama", "lemonade", "bench")
+        kinds = [k for k in ("llama", "endpoint", "ollama", "lemonade", "bench", "gpuproc")
                  if by_kind.get(k)]
 
         keys: list[Seg] = []
@@ -2283,6 +2329,7 @@ PALETTE: dict[str, tuple[int, str | None, str]] = {
     "b_ollama":   (61, "blue", ""),
     "b_lemonade": (131, "red", ""),
     "b_bench":    (103, "blue", ""),
+    "b_gpuproc":  (139, "magenta", ""),
 }
 
 

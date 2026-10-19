@@ -20,6 +20,13 @@ unit_glob_service = "llama-*.service"
 # busy; when idle it shows 0.0 and the figure moves to the line below.
 urls = []   # e.g. ["http://127.0.0.1:8092"]
 
+[gpu_processes]
+# Every other process holding at least min_mib of GPU memory gets a line in the
+# "GPU processes" panel: speech servers, PyTorch scripts, engines in containers.
+# 0 switches the panel off. names: readable names, matched against the command line.
+min_mib = 256
+names = []  # e.g. [{ name = "speech-tts", match = "faster_qwen3_tts" }]
+
 [ollama]
 url = "http://127.0.0.1:11434"
 # Used to match a loaded model to its runner process. First readable one wins.
